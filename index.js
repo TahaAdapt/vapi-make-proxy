@@ -13,26 +13,23 @@ if (!MAKE_WEBHOOK_URL) {
   process.exit(1);
 }
 
-// In-memory store for pending Make responses
 const pendingResponses = {};
 
-// Endpoint that Vapi calls
+// Vapi sends the request here
 app.post('/vapi-proxy', async (req, res) => {
-  const requestId = Date.now().toString(); // Unique request ID
+  const requestId = Date.now().toString();
   req.body.requestId = requestId;
 
   try {
-    // Send data to Make (including requestId)
     await axios.post(MAKE_WEBHOOK_URL, req.body, {
       headers: { 'Content-Type': 'application/json' }
     });
 
-    // Wait for Make to respond to /vapi-callback with the same requestId
     const result = await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         delete pendingResponses[requestId];
         reject(new Error('Timeout waiting for Make response'));
-      }, 15000); // Wait max 15s
+      }, 15000); // 15s timeout
 
       pendingResponses[requestId] = (data) => {
         clearTimeout(timeout);
@@ -40,30 +37,37 @@ app.post('/vapi-proxy', async (req, res) => {
       };
     });
 
-    res.status(200).json(result); // Send Make's response back to Vapi
+    res.status(200).json(result);
   } catch (err) {
     console.error('❌ Error:', err.message);
     res.status(500).json({ error: 'Failed to process request.' });
   }
 });
 
-// Endpoint Make calls back to when it's done
+// Make sends the response here
 app.post('/vapi-callback', (req, res) => {
   const { requestId, ...responseData } = req.body;
 
-  // Optional cleanup: remove traceId from slotsAvailable if it exists
-  if (
-    responseData.slotsAvailable &&
-    typeof responseData.slotsAvailable === 'object' &&
-    'traceId' in responseData.slotsAvailable
-  ) {
-    delete responseData.slotsAvailable.traceId;
+  const originalSlots = responseData.slotsAvailable || {};
+  const cleanedSlots = {};
+  let dateIndex = 1;
+
+  for (const key in originalSlots) {
+    if (key === 'traceId') continue;
+
+    cleanedSlots[`Date${dateIndex}`] = {
+      date: key,
+      slots: originalSlots[key].slots || []
+    };
+    dateIndex++;
   }
+
+  responseData.slotsAvailable = cleanedSlots;
 
   if (pendingResponses[requestId]) {
     pendingResponses[requestId](responseData);
     delete pendingResponses[requestId];
-    res.status(200).json({ status: 'Delivered to proxy' });
+    res.status(200).json({ status: 'Delivered to proxy (cleaned)' });
   } else {
     res.status(404).json({ error: 'Unknown or expired requestId' });
   }

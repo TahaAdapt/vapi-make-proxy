@@ -51,6 +51,15 @@ app.post('/vapi-proxy', async (req, res) => {
 app.post('/vapi-callback', (req, res) => {
   const { requestId, ...responseData } = req.body;
 
+  // Optional cleanup: remove traceId from slotsAvailable if it exists
+  if (
+    responseData.slotsAvailable &&
+    typeof responseData.slotsAvailable === 'object' &&
+    'traceId' in responseData.slotsAvailable
+  ) {
+    delete responseData.slotsAvailable.traceId;
+  }
+
   if (pendingResponses[requestId]) {
     pendingResponses[requestId](responseData);
     delete pendingResponses[requestId];
